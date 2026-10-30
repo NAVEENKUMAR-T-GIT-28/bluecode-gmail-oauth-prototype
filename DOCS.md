@@ -97,7 +97,7 @@ Before public launch, we need:
 | Service | Expected cost |
 |---|---|
 | Google OAuth | No separate per-user fee |
-| Gmail API | Standard usage currently has no additional charge below the published billing threshold |
+| Gmail API | No additional charge under the applicable daily billing threshold |
 | Google Cloud project | Project creation is free |
 | Gmail account | Free Gmail or paid Workspace subscription |
 | Domain | Annual registration fee |
@@ -106,24 +106,80 @@ Before public launch, we need:
 | AI API | Depends on usage and selected model |
 | Google security assessment | Separate assessor quotation |
 
-### Gmail API limits
+### Gmail API quota limits
 
-For new projects covered by Google's May 2026 quota model:
+For projects covered by Google's May 2026 quota model:
 
-- 1,200,000 quota units/minute per project.
-- 6,000 quota units/minute per user.
-- 80 million quota units/day billing threshold.
+| Quota category | Limit | Applies to |
+|---|---:|---|
+| Per project per minute | 1,200,000 units | All founders combined |
+| Per user per minute | 6,000 units | Each connected Gmail account |
+| Per project per day | 80,000,000 units | All founders combined |
 
-Google currently states that standard Gmail API usage is free and that billing beyond the daily threshold is planned for later in 2026. Final charges must be checked before launch.
+### What is a quota unit?
 
-### Email sending limits
+A quota unit measures the workload of a Gmail API operation. It is not an individual email, word or character.
 
-- Personal Gmail: generally up to 500 emails per day.
-- Paid Google Workspace: generally up to 2,000 messages per day, subject to account eligibility and Google's policies.
+| Gmail API operation | Quota units |
+|---|---:|
+| Send one email | 100 |
+| List messages | 5 |
+| Retrieve message metadata | 20 |
+| Retrieve complete email content | 60 |
+| Retrieve complete conversation thread | 120 |
+| Check Gmail history | 2 |
 
-BlueCode OS cannot override Google's sending limits.
+### Estimated API usage per complete email workflow
 
-**Security assessment:** Google does not charge the developer for the assessment itself. The independent approved assessor sets the price. We need quotations before calculating this expense.
+| Action | API units |
+|---|---:|
+| Send outreach email | 100 |
+| Check new messages | 5 |
+| Check mailbox history | 2 |
+| Fetch matching reply metadata | 20 |
+| Retrieve complete reply content | 60 |
+| **Total** | **187 units** |
+
+<text color="secondary" size="xs">Illustrative calculation assuming one request for each operation. Actual usage depends on synchronization frequency, pagination and implementation.</text>
+
+### Estimated daily capacity
+
+At 187 quota units per complete workflow:
+
+\[
+80,000,000 \div 187 \approx 427,807
+\]
+
+| Metric | Estimated value |
+|---|---:|
+| Daily API quota threshold | 80,000,000 units |
+| Units per complete workflow | 187 |
+| Theoretical complete workflows | 427,807 per day |
+| Additional Gmail API charge below threshold | ₹0 |
+
+**Billing clarification:** Google's current published quota documentation describes standard Gmail API usage below the 80-million-unit daily threshold as free. Billing beyond the threshold is planned for later in 2026; final prices must be checked when published. The 80-million limit is a project-wide API usage threshold, not an email sending allowance.
+
+### Gmail account sending limits
+
+These limits are separate from Gmail API quota.
+
+| Connected account | General daily sending limit |
+|---|---:|
+| Personal Gmail | 500 emails |
+| Eligible paid Google Workspace | Up to 2,000 messages |
+| Workspace trial | Generally 500 emails |
+
+Each founder has their own account-level sending limit.
+
+For example, if 100 founders connect their own personal Gmail accounts, their theoretical combined daily allowance is 50,000 emails, subject to Google's account policies.
+
+**Important:** BlueCode OS uses one shared Google Cloud OAuth application, but the API quota is shared at project level and email sending limits belong to individual founder accounts.
+
+### Security assessment cost
+
+Google does not charge a separate application fee for OAuth verification. However, restricted-scope access generally requires an independent security assessment by an approved assessor, unless an exception applies.
+
+The assessor determines the cost. A quotation is required before calculating this expense.
 
 ## 6. Current demonstration status
 
