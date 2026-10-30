@@ -1,6 +1,7 @@
 {
   "name": "bluecode-os-email-lifecycle",
   "version": "2.0.0",
+  "author":"NAVEENKUMAR T",
   "private": true,
   "description": "Gmail OAuth email lifecycle tracking and reply inbox for BlueCode OS",
   "main": "server.js",
