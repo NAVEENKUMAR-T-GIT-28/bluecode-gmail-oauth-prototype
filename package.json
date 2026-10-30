@@ -1,10 +1,10 @@
 {
-  "name": "bluecode-gmail-oauth-prototype",
-  "version": "1.0.0",
+  "name": "bluecode-os-email-lifecycle",
+  "version": "2.0.0",
   "private": true,
-  "description": "BlueCode OS local Gmail OAuth, sending and open/click tracking prototype",
+  "description": "Gmail OAuth email lifecycle tracking and reply inbox for BlueCode OS",
   "main": "server.js",
-  "scripts": { "start": "node server.js", "dev": "node --watch server.js" },
+  "scripts": {"start":"node server.js","dev":"node --watch server.js","check":"node --check server.js && node --check lib/gmail.js && node --check lib/tracking.js"},
   "dependencies": {
     "dotenv": "^16.4.7",
     "express": "^4.21.2",

@@ -1,84 +1,38 @@
 <!doctype html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>BlueCode OS · Email Lifecycle Demo</title>
-  <style>
-    :root{font-family:Inter,system-ui,Segoe UI,Arial,sans-serif;color:#172033;background:#f4f6fa}
-    *{box-sizing:border-box}body{margin:0}.wrap{max-width:1050px;margin:36px auto;padding:0 18px}
-    header{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:24px}
-    .brand{font-weight:800;font-size:22px}.brand span{color:#f07832}.sub{color:#647084;font-size:13px;margin-top:5px}
-    .pill{border-radius:99px;background:#e9edf4;padding:7px 11px;font-size:12px}
-    .grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.card{background:white;border:1px solid #e3e8f0;border-radius:16px;padding:22px;box-shadow:0 8px 28px #18233a08}
-    h2{font-size:17px;margin:0 0 8px}p{color:#687386;font-size:13px;line-height:1.55}
-    button{border:0;border-radius:9px;padding:11px 15px;font-weight:700;cursor:pointer;background:#172033;color:white}
-    button.secondary{background:#edf0f5;color:#253047}button.danger{background:#fff0ed;color:#b43b26}
-    button:disabled{opacity:.5;cursor:not-allowed}
-    .status{font-size:13px;padding:12px;border-radius:10px;background:#f3f6fa;margin:15px 0}
-    label{display:block;font-size:12px;font-weight:700;margin:13px 0 6px;color:#475267}
-    input,textarea{width:100%;padding:11px;border:1px solid #dce2eb;border-radius:9px;font:inherit;font-size:14px}
-    textarea{min-height:150px;resize:vertical}.actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:14px}
-    .wide{grid-column:1/-1}.mail{border-top:1px solid #edf0f4;padding:15px 0}.mail:first-child{border-top:0}
-    .mail strong{font-size:14px}.meta{font-size:12px;color:#788397;margin-top:4px}
-    .events{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}.event{font-size:11px;background:#eef3fa;padding:5px 8px;border-radius:99px}
-    .status-badge{font-size:11px;padding:5px 9px;border-radius:99px;font-weight:700;background:#edf0f5;color:#344055}
-    .submitted{background:#eaf0fb;color:#31558f}.delivered{background:#e5f6ed;color:#17663b}.bounced{background:#fff0ed;color:#ae3524}.opened{background:#eaf4ff;color:#155d9c}.clicked{background:#f1eafe;color:#6941a5}.send_failed{background:#fce7e7;color:#9b2525}
-    .notice{background:#fff8e9;border:1px solid #f5dfad;padding:12px;border-radius:10px;color:#75551c;font-size:12px;line-height:1.5;margin-top:14px}
-    #toast{position:fixed;bottom:20px;right:20px;background:#172033;color:white;padding:12px 16px;border-radius:10px;display:none;max-width:420px}
-    @media(max-width:700px){.grid{grid-template-columns:1fr}.wide{grid-column:auto}header{align-items:flex-start;flex-direction:column}}
-  </style>
-</head>
-<body>
-<div class="wrap">
-  <header><div><div class="brand">BlueCode <span>OS</span></div><div class="sub">Gmail OAuth · Sending · Email lifecycle tracking</div></div><div class="pill">LOCAL DEVELOPMENT DEMO</div></header>
-  <div class="grid">
-    <section class="card">
-      <h2>1. Connect your Gmail</h2>
-      <p>Connect the Gmail account that will send email. Bounce sync also reads delivery-failure notifications from this mailbox.</p>
-      <div class="status" id="connection">Checking Gmail connection…</div>
-      <div class="actions"><button id="connect">Connect Gmail with Google</button><button class="secondary" id="refresh">Refresh</button><button class="danger" id="disconnect">Disconnect</button></div>
-      <div class="notice">Reconnecting may show a new consent screen because this version adds Gmail read-only access for bounce-notice detection.</div>
-    </section>
-    <section class="card">
-      <h2>2. Lifecycle definitions</h2>
-      <p><b>Submitted:</b> Gmail accepted the API request. <b>Delivered:</b> only mark with positive delivery evidence. <b>Bounced:</b> recognizable failure notice found. <b>Opened:</b> pixel requested. <b>Clicked:</b> tracked redirect requested.</p>
-      <div class="notice">Gmail API does not provide a definitive delivered webhook. This demo scans the connected mailbox for common DSN/bounce messages. It is best-effort, not a carrier-grade delivery guarantee. Pixel and clicks can be triggered by privacy proxies or automated scanners.</div>
-    </section>
-    <section class="card wide">
-      <h2>3. Compose and send</h2>
-      <p>Plain URLs in your message are converted to tracked links automatically.</p>
-      <form id="sendForm">
-        <label>Recipient</label><input id="to" type="email" placeholder="recipient@example.com" required />
-        <label>Subject</label><input id="subject" placeholder="A message from BlueCode OS" required />
-        <label>Message</label><textarea id="body" placeholder="Hi,&#10;&#10;Please review: https://www.google.com&#10;&#10;Regards" required></textarea>
-        <div class="actions"><button type="submit">Send test email</button></div>
-      </form>
-    </section>
-    <section class="card wide">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
-        <div><h2>4. Email activity</h2><p>Submitted, delivered evidence, bounce notices, open-pixel and tracked-link activity.</p></div>
-        <div class="actions"><button class="secondary" id="syncBounces">Sync bounce notices</button><button class="secondary" id="reloadLogs">Refresh activity</button></div>
-      </div>
-      <div id="syncResult" class="meta"></div>
-      <div id="logs">No emails yet.</div>
-    </section>
-  </div>
-</div>
-<div id="toast"></div>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>BlueCode OS · Email Intelligence</title>
+<style>
+:root{font-family:Inter,ui-sans-serif,system-ui,-apple-system,Segoe UI,Arial;color:#172033;background:#f5f7fb;font-synthesis:none}*{box-sizing:border-box}body{margin:0}.shell{max-width:1250px;margin:auto;padding:28px 22px 60px}.top{display:flex;justify-content:space-between;align-items:center;gap:18px;margin-bottom:25px}.brand{font-weight:850;font-size:23px;letter-spacing:-.7px}.brand em{font-style:normal;color:#e87935}.muted{color:#778296;font-size:13px}.pill{border-radius:999px;background:#e9edf3;padding:8px 12px;font-size:11px;font-weight:700;letter-spacing:.3px}.layout{display:grid;grid-template-columns:330px minmax(0,1fr);gap:18px}.stack{display:grid;gap:16px;align-content:start}.card{background:#fff;border:1px solid #e5e9f0;border-radius:15px;padding:19px;box-shadow:0 7px 25px #18243a08}.card h2{font-size:15px;margin:0 0 7px}.card p{font-size:12px;line-height:1.55;color:#758094;margin:0 0 14px}.btn{border:0;border-radius:9px;padding:10px 13px;background:#17243a;color:#fff;font-weight:700;font-size:12px;cursor:pointer}.btn.alt{background:#edf1f6;color:#26354b}.btn.warn{background:#fff0ed;color:#a63c2a}.btn:disabled{opacity:.5;cursor:not-allowed}.row{display:flex;align-items:center;gap:8px;flex-wrap:wrap}.connection{padding:11px;border-radius:9px;background:#f4f6fa;color:#526076;font-size:12px;margin:12px 0}.stats{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:16px}.stat{background:#fff;border:1px solid #e5e9f0;border-radius:13px;padding:14px}.stat b{display:block;font-size:24px;letter-spacing:-.8px}.stat span{font-size:11px;color:#788397}.compose label{font-size:11px;font-weight:700;color:#526075;display:block;margin:12px 0 5px}input,textarea{width:100%;border:1px solid #dce2ea;border-radius:9px;padding:10px 11px;font:inherit;font-size:13px;outline:none}textarea{min-height:125px;resize:vertical}.toolbar{display:flex;justify-content:space-between;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:13px}.filters{display:flex;gap:6px;flex-wrap:wrap}.filter{border:1px solid #e2e7ee;background:#fff;border-radius:999px;padding:7px 10px;font-size:11px;color:#59677c;cursor:pointer}.filter.active{background:#17243a;color:#fff;border-color:#17243a}.mail{border-top:1px solid #edf0f4;padding:15px 0;cursor:pointer}.mail:first-child{border-top:0}.mail:hover .subject{color:#d66c2f}.mailhead{display:flex;justify-content:space-between;gap:10px;align-items:center}.subject{font-weight:750;font-size:13px}.meta{font-size:11px;color:#8791a1;margin-top:4px}.badge{font-size:10px;padding:5px 8px;border-radius:999px;background:#eff2f6;color:#526075;font-weight:800;white-space:nowrap}.badge.PENDING,.badge.SENDING,.badge.SUBMITTED,.badge.DELIVERY_UNKNOWN{background:#edf2fa;color:#34557f}.badge.DELIVERED{background:#e8f6ee;color:#216c43}.badge.OPENED{background:#eaf4ff;color:#205f9b}.badge.CLICKED{background:#f2ecff;color:#6942a1}.badge.REPLIED{background:#e8f7f5;color:#176d61}.badge.BOUNCED,.badge.ADDRESS_NOT_FOUND,.badge.SEND_FAILED{background:#fff0ed;color:#a73c2b}.events{display:flex;flex-wrap:wrap;gap:5px;margin-top:9px}.event{font-size:10px;color:#647188;background:#f1f4f8;padding:5px 7px;border-radius:6px}.notice{background:#fff9ed;border:1px solid #f2e3bd;border-radius:9px;padding:10px;color:#755b25;font-size:11px;line-height:1.5;margin-top:12px}.inbox-item{padding:12px 0;border-top:1px solid #edf0f4;cursor:pointer}.inbox-item:first-child{border-top:0}.inbox-item.unread b:after{content:' NEW';font-size:9px;color:#cf6c32}.inbox-item b{font-size:12px}.inbox-item p{margin:5px 0 0;font-size:11px}.detail{display:none;margin-top:14px;padding:14px;background:#f7f9fc;border-radius:10px}.detail.show{display:block}.replybody{font-size:12px;line-height:1.65;white-space:pre-wrap;color:#344055;max-height:300px;overflow:auto}.eventline{border-left:2px solid #dfe5ed;margin:12px 0 12px 5px;padding-left:13px}.eventline div{font-size:11px;margin:8px 0;color:#526075}.eventline small{color:#929bab}.empty{color:#929bab;font-size:12px;padding:18px 0}#toast{display:none;position:fixed;bottom:18px;right:18px;background:#17243a;color:#fff;padding:12px 15px;border-radius:9px;font-size:12px;max-width:420px;z-index:9}.full{grid-column:1/-1}@media(max-width:900px){.layout{grid-template-columns:1fr}.stats{grid-template-columns:repeat(2,1fr)}}
+</style></head>
+<body><div class="shell">
+<header class="top"><div><div class="brand">BlueCode <em>OS</em></div><div class="muted">Email intelligence · Lifecycle · Conversations</div></div><div class="pill">GMAIL CONNECTOR</div></header>
+<div class="layout">
+<aside class="stack">
+<section class="card"><h2>Connected mailbox</h2><p>Send from and monitor the Gmail account connected to this BlueCode OS workspace.</p><div id="connection" class="connection">Checking connection…</div><div class="row"><button class="btn" id="connect">Connect Gmail</button><button class="btn alt" id="refreshConnection">Refresh</button><button class="btn warn" id="disconnect">Disconnect</button></div><div class="notice">Inbox sync runs periodically while the server is running. For public multi-user deployment, connect this demo identity to your real BlueCode OS authentication middleware.</div></section>
+<section class="card compose"><h2>Compose outreach</h2><p>Plain URLs and HTML links are wrapped with tracked redirects. A tracking pixel is added automatically.</p><form id="sendForm"><label>Recipient email</label><input id="to" type="email" placeholder="contact@company.com" required><label>Subject</label><input id="subject" placeholder="Partnership opportunity" required><label>Message</label><textarea id="body" placeholder="Hi,\n\nI would like to discuss...\n\nRegards" required></textarea><div class="row" style="margin-top:12px"><button class="btn" type="submit">Send tracked email</button></div></form></section>
+<section class="card"><h2>Mailbox synchronization</h2><p>Fetch recent messages, capture replies and parse delivery-status notifications.</p><div class="row"><button class="btn alt" id="sync">Sync inbox now</button><span class="muted" id="syncTime"></span></div><div class="meta" id="syncResult"></div></section>
+</aside>
+<main class="stack">
+<div class="stats"><div class="stat"><b id="countSent">0</b><span>Emails tracked</span></div><div class="stat"><b id="countReplies">0</b><span>Replies captured</span></div><div class="stat"><b id="countClicks">0</b><span>Click requests</span></div><div class="stat"><b id="countBounces">0</b><span>Bounced / invalid</span></div></div>
+<section class="card"><div class="toolbar"><div><h2>Email lifecycle</h2><div class="muted">Select an email to inspect event history and its conversation.</div></div><div class="row"><button class="btn alt" id="reload">Refresh activity</button></div></div><div class="filters" id="filters"><button class="filter active" data-status="ALL">All</button><button class="filter" data-status="SUBMITTED">Submitted</button><button class="filter" data-status="DELIVERED">Delivered</button><button class="filter" data-status="OPENED">Opened</button><button class="filter" data-status="CLICKED">Clicked</button><button class="filter" data-status="REPLIED">Replied</button><button class="filter" data-status="BOUNCED">Bounced</button></div><div id="emails" style="margin-top:9px"><div class="empty">No tracked emails yet.</div></div><div id="emailDetail" class="detail"></div></section>
+<section class="card"><div class="toolbar"><div><h2>Reply inbox</h2><div class="muted">Replies matched to outreach emails in this mailbox.</div></div><button class="btn alt" id="loadReplies">Refresh inbox</button></div><div id="replies"><div class="empty">No replies captured yet.</div></div></section>
+</main></div></div><div id="toast"></div>
 <script>
-const $=id=>document.getElementById(id);
-function toast(s){$('toast').textContent=s;$('toast').style.display='block';setTimeout(()=>$('toast').style.display='none',5000)}
-async function api(url,options={}){const r=await fetch(url,{...options,headers:{'Content-Type':'application/json',...(options.headers||{})}});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||'Request failed');return d}
-function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-async function loadConnection(){try{const d=await api('/api/connection');$('connection').textContent=d.connected?'Connected as '+d.email:'No Gmail account connected';$('connect').textContent=d.connected?'Reconnect Gmail':'Connect Gmail with Google';$('sendForm').querySelector('button').disabled=!d.connected;$('syncBounces').disabled=!d.connected}catch(e){$('connection').textContent=e.message}}
-async function loadLogs(){try{const logs=await api('/api/emails');if(!logs.length){$('logs').textContent='No emails sent yet.';return}$('logs').innerHTML=logs.map(m=>{const st=['submitted','delivered','bounced','opened','clicked','send_failed'].includes(m.status)?m.status:'submitted';const ev=(m.events||[]).map(e=>`<span class="event">${esc(e.type)} · ${new Date(e.at).toLocaleString()}${e.automatedLikely?' · automated-looking':''}</span>`).join('');return `<div class="mail"><div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap"><strong>${esc(m.subject||'(no subject)')}</strong><span class="status-badge ${st}">${st==="send_failed"?"SEND FAILED":st.toUpperCase()}</span></div><div class="meta">${esc(m.sender)} → ${esc(m.recipient)} · ${new Date(m.createdAt).toLocaleString()}</div><div class="meta">Open requests: ${Number(m.openCount||0)} · Click requests: ${Number(m.clickCount||0)} · Tracked links: ${(m.trackedLinks||[]).length}</div>${m.bounceReason?`<div class="meta" style="color:#ae3524">Bounce: ${esc(m.bounceReason)}</div>`:''}<div class="events">${ev||'<span class="event">No tracking signal yet</span>'}</div></div>`}).join('')}catch(e){$('logs').textContent=e.message}}
-$('connect').onclick=()=>location.href='/auth/google';$('refresh').onclick=loadConnection;$('reloadLogs').onclick=loadLogs;
-$('disconnect').onclick=async()=>{try{await api('/api/disconnect',{method:'POST'});toast('Gmail disconnected');await loadConnection()}catch(e){toast(e.message)}};
-$('sendForm').onsubmit=async e=>{e.preventDefault();try{const d=await api('/api/send',{method:'POST',body:JSON.stringify({to:$('to').value,subject:$('subject').value,body:$('body').value})});toast('Gmail accepted the message from '+d.sender+' · pixel included · '+d.tracking.links+' link(s) tracked');$('sendForm').reset();await loadLogs()}catch(e){toast(e.message)}};
-$('syncBounces').onclick=async()=>{try{$('syncResult').textContent='Scanning Gmail for delivery-failure notices…';const d=await api('/api/email/sync-delivery',{method:'POST'});$('syncResult').textContent=`Scanned ${d.messagesScanned} messages · ${d.bounceEventsAdded} bounce event(s) added. ${d.note}`;await loadLogs()}catch(e){$('syncResult').textContent=e.message}};
-const qp=new URLSearchParams(location.search);if(qp.get('oauth')==='connected')toast('Gmail connected successfully');if(qp.get('oauth')==='denied')toast('Google authorization cancelled');history.replaceState({},'',location.pathname);
-loadConnection();loadLogs();
-</script>
-</body>
-</html>
+const $=id=>document.getElementById(id);let EMAILS=[],REPLIES=[],filter='ALL';
+function esc(v){return String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+function toast(s){$('toast').textContent=s;$('toast').style.display='block';clearTimeout(toast.t);toast.t=setTimeout(()=>$('toast').style.display='none',4200)}
+async function api(url,opt={}){const r=await fetch(url,{...opt,headers:{'Content-Type':'application/json',...(opt.headers||{})}});const d=await r.json().catch(()=>({}));if(!r.ok)throw Error(d.error||`Request failed (${r.status})`);return d}
+async function loadConnection(){try{const d=await api('/api/connection');$('connection').textContent=d.connected?`Connected as ${d.email}`:'No Gmail mailbox connected';$('connect').textContent=d.connected?'Reconnect Gmail':'Connect Gmail';$('sendForm').querySelector('button').disabled=!d.connected;$('sync').disabled=!d.connected;$('disconnect').disabled=!d.connected;$('syncTime').textContent=d.lastSyncAt?`Last sync ${new Date(d.lastSyncAt).toLocaleString()}`:'';if(d.lastSyncError)$('syncResult').textContent=d.lastSyncError}catch(e){$('connection').textContent=e.message}}
+function renderStats(){ $('countSent').textContent=EMAILS.length;$('countReplies').textContent=REPLIES.length;$('countClicks').textContent=EMAILS.reduce((n,e)=>n+(e.clickCount||0),0);$('countBounces').textContent=EMAILS.filter(e=>['BOUNCED','ADDRESS_NOT_FOUND'].includes(e.status)).length }
+function renderEmails(){const list=EMAILS.filter(e=>filter==='ALL'||e.status===filter);if(!list.length){$('emails').innerHTML='<div class="empty">No emails in this view.</div>';return}$('emails').innerHTML=list.map(e=>`<div class="mail" data-id="${esc(e._id)}"><div class="mailhead"><div class="subject">${esc(e.subject||'(no subject)')}</div><span class="badge ${esc(e.status)}">${esc(e.status)}</span></div><div class="meta">${esc(e.sender)} → ${esc(e.recipient)} · ${new Date(e.createdAt).toLocaleString()}</div><div class="meta">Open requests ${e.openCount||0} · Click requests ${e.clickCount||0} · Replies ${REPLIES.filter(r=>String(r.emailLogId)===String(e._id)).length}</div><div class="events">${(e.events||[]).slice(-5).map(x=>`<span class="event">${esc(x.type)} · ${new Date(x.at).toLocaleString()}</span>`).join('')}</div>${e.bounceReason?`<div class="meta" style="color:#a73c2b">${esc(e.bounceCode)} · ${esc(e.bounceReason)}</div>`:''}</div>`).join('');document.querySelectorAll('.mail[data-id]').forEach(el=>el.onclick=()=>showEmail(el.dataset.id))}
+async function loadEmails(){EMAILS=await api('/api/emails');renderStats();renderEmails()}
+async function showEmail(id){try{const d=await api('/api/emails/'+encodeURIComponent(id));const e=d.email;$('emailDetail').classList.add('show');$('emailDetail').innerHTML=`<div class="mailhead"><b>${esc(e.subject)}</b><span class="badge ${esc(e.status)}">${esc(e.status)}</span></div><div class="meta">${esc(e.sender)} → ${esc(e.recipient)}</div><div class="eventline">${(e.events||[]).map(v=>`<div><b>${esc(v.type)}</b> — ${esc(v.detail)}<br><small>${new Date(v.at).toLocaleString()} · ${esc(v.source)}</small></div>`).join('')||'<div>No events recorded.</div>'}</div><b style="font-size:12px">Matched replies (${d.replies.length})</b>${d.replies.map(r=>`<div class="inbox-item"><b>${esc(r.from)}</b><div class="meta">${new Date(r.receivedAt).toLocaleString()} · ${esc(r.subject)}</div><div class="replybody">${esc(r.text||r.snippet||'(No plain-text body found)')}</div></div>`).join('')||'<div class="empty">No matching reply yet.</div>'}` }catch(e){toast(e.message)}}
+async function loadReplies(){REPLIES=await api('/api/replies');renderStats();if(!REPLIES.length){$('replies').innerHTML='<div class="empty">No matching replies captured yet. Run inbox sync after the recipient replies.</div>';return}$('replies').innerHTML=REPLIES.map(r=>`<div class="inbox-item ${r.isRead?'':'unread'}" data-id="${esc(r._id)}"><div class="mailhead"><b>${esc(r.from)}</b><span class="meta">${new Date(r.receivedAt).toLocaleString()}</span></div><div class="meta">${esc(r.subject)}</div><p>${esc((r.text||r.snippet||'').slice(0,240))}</p></div>`).join('');document.querySelectorAll('.inbox-item[data-id]').forEach(el=>el.onclick=async()=>{const r=REPLIES.find(x=>String(x._id)===el.dataset.id);if(r?.emailLogId)await showEmail(r.emailLogId);api('/api/replies/'+el.dataset.id+'/read',{method:'POST'}).then(loadReplies).catch(()=>{})})}
+$('connect').onclick=()=>location.href='/auth/google';$('refreshConnection').onclick=loadConnection;$('reload').onclick=async()=>{try{await loadEmails();await loadReplies();toast('Activity refreshed')}catch(e){toast(e.message)}};$('loadReplies').onclick=()=>loadReplies();$('disconnect').onclick=async()=>{try{await api('/api/disconnect',{method:'POST'});toast('Gmail disconnected');await loadConnection()}catch(e){toast(e.message)}};
+$('sendForm').onsubmit=async e=>{e.preventDefault();const b=$('sendForm').querySelector('button');b.disabled=true;try{const d=await api('/api/send',{method:'POST',body:JSON.stringify({to:$('to').value,subject:$('subject').value,body:$('body').value})});toast('Gmail accepted the message. Delivery is not yet confirmed.');$('sendForm').reset();await loadEmails();if(d.id)showEmail(d.id)}catch(e){toast(e.message)}finally{b.disabled=false;loadConnection()}};
+$('sync').onclick=async()=>{const b=$('sync');b.disabled=true;$('syncResult').textContent='Reading recent Gmail messages…';try{const d=await api('/api/gmail/sync',{method:'POST'});$('syncResult').textContent=`Scanned ${d.messagesScanned}; captured ${d.repliesAdded} new replies; matched ${d.bounceMessagesMatched} bounce notices.`;$('syncTime').textContent=`Last sync ${new Date(d.lastSyncAt).toLocaleString()}`;await loadEmails();await loadReplies()}catch(e){$('syncResult').textContent=e.message}finally{b.disabled=false}};
+$('filters').onclick=e=>{const b=e.target.closest('[data-status]');if(!b)return;filter=b.dataset.status;document.querySelectorAll('.filter').forEach(x=>x.classList.toggle('active',x===b));renderEmails()};
+const qp=new URLSearchParams(location.search);if(qp.get('oauth')==='connected')toast('Gmail connected successfully');if(qp.get('oauth')==='denied')toast('Google authorization was cancelled');history.replaceState({},'',location.pathname);
+(async()=>{await loadConnection();try{await loadEmails();await loadReplies()}catch(e){toast(e.message)}})();
+</script></body></html>

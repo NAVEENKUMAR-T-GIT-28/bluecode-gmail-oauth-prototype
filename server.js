@@ -1,487 +1,328 @@
-require("dotenv").config();
-
-const express = require("express");
-const session = require("express-session");
-const mongoose = require("mongoose");
-const crypto = require("crypto");
-const path = require("path");
-const { google } = require("googleapis");
+require('dotenv').config();
+const express = require('express');
+const session = require('express-session');
+const mongoose = require('mongoose');
+const path = require('path');
+const crypto = require('crypto');
+const { google } = require('googleapis');
+const { EmailConnection, EmailLog, EmailReply, ProcessedMessage } = require('./models');
+const { encrypt, decrypt, randomToken, sha256 } = require('./lib/security');
+const { SCOPES, createOAuthClient, getConnection, headerMap, collectBodies, stripHtml, decodeBase64Mime, buildMime } = require('./lib/gmail');
+const { BASE, addEvent, instrumentHtml, gifBytes, recordOpen, recordClick } = require('./lib/tracking');
 
 const app = express();
 const PORT = Number(process.env.PORT || 5000);
-const SCOPES = [
-  "openid",
-  "email",
-  "https://www.googleapis.com/auth/gmail.send",
-  // Added only to let the connected owner inspect their own mailbox for DSN/bounce notices.
-  "https://www.googleapis.com/auth/gmail.readonly"
-];
-const DEMO_USER_ID = process.env.DEMO_USER_ID || "demo-user-001";
-const TRACKING_BASE = () => (process.env.PUBLIC_TRACKING_URL || `http://localhost:${PORT}`).replace(/\/+$/, "");
+const SYNC_INTERVAL = Math.max(15000, Number(process.env.GMAIL_SYNC_INTERVAL_MS || 60000));
+const SYNC_MAX = Math.max(10, Math.min(100, Number(process.env.GMAIL_SYNC_MAX_MESSAGES || 50)));
 
-app.use(express.json({ limit: "1mb" }));
+app.disable('x-powered-by');
+app.use(express.json({ limit: '2mb' }));
 app.use(session({
-  secret: process.env.SESSION_SECRET || "local-only-change-me",
+  name: 'bluecode.sid',
+  secret: process.env.SESSION_SECRET || 'development-only-change-this',
   resave: false,
   saveUninitialized: false,
-  cookie: { httpOnly: true, sameSite: "lax", secure: false, maxAge: 24 * 60 * 60 * 1000 }
+  cookie: { httpOnly: true, sameSite: 'lax', secure: process.env.SESSION_COOKIE_SECURE === 'true', maxAge: 7 * 86400000 }
 }));
-app.use(express.static(path.join(__dirname, "public")));
+app.use(express.static(path.join(__dirname, 'public'), { etag: true, maxAge: '1h' }));
 
-const connectionSchema = new mongoose.Schema({
-  userId: { type: String, required: true, unique: true, index: true },
-  email: { type: String, required: true },
-  encryptedTokens: { type: String, required: true },
-  connectedAt: { type: Date, default: Date.now },
-  lastBounceSyncAt: Date,
-  gmailHistoryId: String
-});
-
-const eventSchema = new mongoose.Schema({
-  type: {
-    type: String,
-    enum: ["submitted", "delivered", "bounced", "opened", "clicked", "send_failed"],
-    required: true
-  },
-  at: { type: Date, default: Date.now },
-  detail: String,
-  source: { type: String, enum: ["gmail_api", "tracking_pixel", "tracking_link", "gmail_dsn", "manual"], default: "gmail_api" },
-  userAgent: String,
-  automatedLikely: { type: Boolean, default: false }
-}, { _id: false });
-
-const trackedLinkSchema = new mongoose.Schema({
-  linkId: { type: String, required: true },
-  destination: { type: String, required: true },
-  clicks: { type: Number, default: 0 }
-}, { _id: false });
-
-const emailSchema = new mongoose.Schema({
-  userId: { type: String, required: true, index: true },
-  sender: String,
-  recipient: String,
-  subject: String,
-  gmailMessageId: String,
-  rfcMessageId: String,
-  trackingToken: { type: String, index: true, sparse: true },
-  trackedLinks: { type: [trackedLinkSchema], default: [] },
-  openCount: { type: Number, default: 0 },
-  clickCount: { type: Number, default: 0 },
-  status: {
-    type: String,
-    enum: ["submitted", "delivered", "bounced", "opened", "clicked", "send_failed"],
-    default: "submitted",
-    index: true
-  },
-  events: [eventSchema],
-  deliveryEvidence: String,
-  bounceReason: String,
-  lastBounceCheckAt: Date,
-  createdAt: { type: Date, default: Date.now }
-});
-
-const EmailConnection = mongoose.model("EmailConnection", connectionSchema);
-const EmailLog = mongoose.model("EmailLog", emailSchema);
-
-function encryptionKey() {
-  const hex = process.env.TOKEN_ENCRYPTION_KEY || "";
-  if (!/^[0-9a-fA-F]{64}$/.test(hex)) throw new Error("TOKEN_ENCRYPTION_KEY must be exactly 64 hexadecimal characters.");
-  return Buffer.from(hex, "hex");
-}
-function encrypt(value) {
-  const iv = crypto.randomBytes(12);
-  const cipher = crypto.createCipheriv("aes-256-gcm", encryptionKey(), iv);
-  const data = Buffer.concat([cipher.update(JSON.stringify(value), "utf8"), cipher.final()]);
-  return [iv, cipher.getAuthTag(), data].map(v => v.toString("base64")).join(".");
-}
-function decrypt(value) {
-  const [iv, tag, data] = value.split(".");
-  const decipher = crypto.createDecipheriv("aes-256-gcm", encryptionKey(), Buffer.from(iv, "base64"));
-  decipher.setAuthTag(Buffer.from(tag, "base64"));
-  return JSON.parse(Buffer.concat([decipher.update(Buffer.from(data, "base64")), decipher.final()]).toString("utf8"));
-}
-function oauthClient() {
-  if (!process.env.GOOGLE_CLIENT_ID || !process.env.GOOGLE_CLIENT_SECRET || !process.env.GOOGLE_REDIRECT_URI) {
-    throw new Error("Set GOOGLE_CLIENT_ID, GOOGLE_CLIENT_SECRET and GOOGLE_REDIRECT_URI in .env");
-  }
-  return new google.auth.OAuth2(process.env.GOOGLE_CLIENT_ID, process.env.GOOGLE_CLIENT_SECRET, process.env.GOOGLE_REDIRECT_URI);
-}
-function requireDemoSession(req, res, next) {
-  if (!req.session.userId) req.session.userId = DEMO_USER_ID;
+// DEMO ONLY: replace this function with your BlueCode OS authentication middleware.
+// It must return the immutable internal account/user ID, never an email supplied by the browser.
+function getUserId(req) { return req.session.userId || (process.env.DEMO_USER_ID || 'demo-user-001'); }
+function requireUser(req, res, next) {
+  req.userId = getUserId(req);
+  if (!req.userId) return res.status(401).json({ error: 'Authentication required.' });
   next();
 }
-app.use("/api", requireDemoSession);
-
-function createEvent(type, detail, source, userAgent = "") {
-  return {
-    type, detail, source, at: new Date(),
-    userAgent: String(userAgent || "").slice(0, 500),
-    automatedLikely: /(bot|crawler|spider|preview|scanner|proofpoint|mimecast|barracuda|safelinks|urlscan|googleimageproxy)/i.test(userAgent || "")
-  };
+app.use('/api', requireUser);
+function oauthClient() { return createOAuthClient(); }
+function safeMessage(error) {
+  const message = String(error?.message || 'Unexpected server error');
+  if (/invalid_grant|insufficient permission|insufficient authentication scopes/i.test(message)) return 'Gmail authorization needs to be renewed. Disconnect Gmail, reconnect and approve the requested read/send permissions.';
+  return message;
 }
-function appendStatusEvent(email, type, detail, source) {
-  const already = email.events.some(e => e.type === type && e.source === source && e.detail === detail);
-  if (!already) email.events.push(createEvent(type, detail, source));
-  // Status is a latest/highest-signal state, but opened/clicked are engagement states.
-  // A bounce supersedes delivery; engagement never overwrites bounce.
-  if (type === "bounced") email.status = "bounced";
-  else if (type === "delivered" && email.status !== "bounced" && email.status !== "opened" && email.status !== "clicked") email.status = "delivered";
-  else if (type === "opened" && email.status !== "bounced" && email.status !== "clicked") email.status = "opened";
-  else if (type === "clicked" && email.status !== "bounced") email.status = "clicked";
+function parseAddress(value = '') {
+  const match = String(value).match(/(?:^|\s)([^<>\s]+@[^<>\s]+\.[^<>\s]+)(?:$|\s)/);
+  return (match?.[1] || String(value).replace(/^.*<|>.*$/g, '')).trim().toLowerCase();
 }
+function normalizeMessageId(value = '') { return String(value).replace(/[<>]/g, '').trim().toLowerCase(); }
+function parseDate(value, fallback) { const d = value ? new Date(Number(value) * 1000) : fallback; return Number.isNaN(d?.getTime?.()) ? fallback : d; }
 
-app.get("/auth/google", requireDemoSession, (req, res) => {
+// OAuth connect: state is one-time and bound to the current session.
+app.get('/auth/google', (req, res) => {
   try {
-    const oauth = oauthClient();
-    const state = crypto.randomBytes(24).toString("hex");
+    const state = randomToken(24);
     req.session.oauthState = state;
-    res.redirect(oauth.generateAuthUrl({
-      access_type: "offline", prompt: "consent", include_granted_scopes: true,
-      scope: SCOPES, state
-    }));
-  } catch (e) { res.status(500).send(e.message); }
+    res.redirect(oauthClient().generateAuthUrl({ access_type: 'offline', prompt: 'consent', include_granted_scopes: true, scope: SCOPES, state }));
+  } catch (e) { res.status(500).send(safeMessage(e)); }
 });
-
-app.get("/auth/google/callback", requireDemoSession, async (req, res) => {
+app.get('/auth/google/callback', async (req, res) => {
   try {
-    if (!req.query.state || req.query.state !== req.session.oauthState) return res.status(400).send("OAuth state validation failed.");
+    if (!req.query.state || req.query.state !== req.session.oauthState) return res.status(400).send('OAuth state validation failed. Start the connection flow again.');
     delete req.session.oauthState;
-    if (req.query.error) return res.redirect("/?oauth=denied");
+    if (req.query.error) return res.redirect('/?oauth=denied');
     const oauth = oauthClient();
-    const { tokens } = await oauth.getToken(String(req.query.code || ""));
+    const { tokens } = await oauth.getToken(String(req.query.code || ''));
     oauth.setCredentials(tokens);
-    const info = await google.oauth2({ version: "v2", auth: oauth }).userinfo.get();
-    const email = info.data.email;
-    if (!email) throw new Error("Google did not return an email address.");
-    const previous = await EmailConnection.findOne({ userId: req.session.userId });
-    const oldTokens = previous ? decrypt(previous.encryptedTokens) : {};
-    const merged = { ...oldTokens, ...tokens };
-    if (!merged.refresh_token && oldTokens.refresh_token) merged.refresh_token = oldTokens.refresh_token;
-    await EmailConnection.findOneAndUpdate(
-      { userId: req.session.userId },
-      { userId: req.session.userId, email, encryptedTokens: encrypt(merged), connectedAt: new Date() },
-      { upsert: true, new: true }
-    );
-    res.redirect("/?oauth=connected");
-  } catch (e) {
-    console.error("[oauth] callback:", e.message);
-    res.status(500).send(`Gmail connection failed: ${e.message}`);
-  }
+    const userInfo = await google.oauth2({ version: 'v2', auth: oauth }).userinfo.get();
+    const email = String(userInfo.data.email || '').toLowerCase();
+    if (!email) throw new Error('Google did not return an email address.');
+    const userId = getUserId(req);
+    const existing = await EmailConnection.findOne({ userId });
+    const previousTokens = existing ? decrypt(existing.encryptedTokens) : {};
+    const mergedTokens = { ...previousTokens, ...tokens };
+    if (!mergedTokens.refresh_token && previousTokens.refresh_token) mergedTokens.refresh_token = previousTokens.refresh_token;
+    await EmailConnection.findOneAndUpdate({ userId }, {
+      userId, email, encryptedTokens: encrypt(mergedTokens), scopes: SCOPES, connectedAt: new Date(), lastSyncError: ''
+    }, { upsert: true, new: true });
+    res.redirect('/?oauth=connected');
+  } catch (e) { console.error('[oauth] callback:', e.message); res.status(500).send(`Gmail connection failed: ${safeMessage(e)}`); }
 });
 
-app.get("/api/connection", async (req, res) => {
-  const c = await EmailConnection.findOne({ userId: req.session.userId }).lean();
-  res.json({ connected: !!c, email: c?.email || null });
+app.get('/api/connection', async (req, res) => {
+  const c = await EmailConnection.findOne({ userId: req.userId }).lean();
+  res.json({ connected: !!c, email: c?.email || null, lastSyncAt: c?.lastSyncAt || null, lastSyncError: c?.lastSyncError || null, requestedScopes: SCOPES });
 });
-
-app.post("/api/disconnect", async (req, res) => {
-  const c = await EmailConnection.findOne({ userId: req.session.userId });
+app.post('/api/disconnect', async (req, res) => {
+  const c = await EmailConnection.findOne({ userId: req.userId });
   if (c) {
-    try {
-      const tokens = decrypt(c.encryptedTokens);
-      const oauth = oauthClient();
-      oauth.setCredentials(tokens);
-      await oauth.revokeCredentials();
-    } catch (e) { console.warn("[oauth] revoke warning:", e.message); }
+    try { const auth = oauthClient(); auth.setCredentials(decrypt(c.encryptedTokens)); await auth.revokeCredentials(); }
+    catch (e) { console.warn('[oauth] token revoke warning:', e.message); }
     await EmailConnection.deleteOne({ _id: c._id });
   }
   res.json({ ok: true });
 });
 
-function b64url(value) {
-  return Buffer.from(value).toString("base64").replace(/\+/g, "-").replace(/\//g, "_").replace(/=+$/, "");
-}
-function escapeHtml(value) {
-  return String(value).replace(/[&<>"']/g, ch => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[ch]));
-}
-function makeTrackedHtml(rawText, email) {
-  const token = email.trackingToken;
-  const base = TRACKING_BASE();
-  const escaped = escapeHtml(rawText);
-  const links = escaped.replace(/(https?:\/\/[^\s<]+)/g, match => {
-    const dest = match.replace(/[),.!?;:]+$/, "");
-    const trailing = match.slice(dest.length);
-    let parsed;
-    try { parsed = new URL(dest); } catch { return match; }
-    if (!["http:", "https:"].includes(parsed.protocol)) return match;
-    const linkId = crypto.randomBytes(10).toString("hex");
-    email.trackedLinks.push({ linkId, destination: parsed.toString(), clicks: 0 });
-    const redirect = `${base}/track/click/${token}/${linkId}`;
-    return `<a href="${redirect}" target="_blank" rel="noopener noreferrer">${dest}</a>${trailing}`;
-  }).replace(/\r?\n/g, "<br>");
-  const pixel = `<img src="${base}/track/open/${token}.gif" width="1" height="1" alt="" style="width:1px;height:1px;border:0" />`;
-  return `<div style="font-family:Arial,sans-serif;line-height:1.5">${links}</div>${pixel}`;
-}
-
-app.post("/api/send", async (req, res) => {
+app.post('/api/send', async (req, res) => {
   let log;
   try {
-    const { to, subject, body } = req.body || {};
-    if (!to || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) return res.status(400).json({ error: "Enter a valid-looking recipient email address." });
-    if (!String(subject || "").trim()) return res.status(400).json({ error: "Subject is required." });
-    if (!String(body || "").trim()) return res.status(400).json({ error: "Email body is required." });
-
-    const conn = await EmailConnection.findOne({ userId: req.session.userId });
-    if (!conn) return res.status(400).json({ error: "Connect Gmail before sending." });
-
-    log = await EmailLog.create({
-      userId: req.session.userId, sender: conn.email, recipient: String(to).trim(),
-      subject: String(subject).trim(), trackingToken: crypto.randomBytes(24).toString("hex"),
-      events: []
-    });
-    const html = makeTrackedHtml(String(body), log);
-    await log.save();
-
-    const mime = [
-      `From: BlueCode OS <${conn.email}>`,
-      `To: ${String(to).trim()}`,
-      `Subject: ${String(subject).replace(/[\r\n]/g, " ")}`,
-      "MIME-Version: 1.0",
-      'Content-Type: text/html; charset="UTF-8"',
-      "Content-Transfer-Encoding: base64",
-      "",
-      Buffer.from(html, "utf8").toString("base64").match(/.{1,76}/g).join("\r\n")
-    ].join("\r\n");
-
-    const oauth = oauthClient();
-    oauth.setCredentials(decrypt(conn.encryptedTokens));
-    const gmail = google.gmail({ version: "v1", auth: oauth });
-    const sent = await gmail.users.messages.send({ userId: "me", requestBody: { raw: b64url(mime) } });
-    log.gmailMessageId = sent.data.id;
-    // Read the actual Message-ID assigned/stored by Gmail for later DSN correlation.
+    const to = String(req.body?.to || '').trim().toLowerCase();
+    const subject = String(req.body?.subject || '').trim();
+    const textBody = String(req.body?.body || '').trim();
+    const htmlInput = String(req.body?.html || '').trim();
+    if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(to)) return res.status(400).json({ error: 'Enter a valid recipient email address.' });
+    if (!subject || !textBody && !htmlInput) return res.status(400).json({ error: 'Subject and message body are required.' });
+    const { connection, gmail } = await getConnection(req.userId);
+    log = await EmailLog.create({ userId: req.userId, sender: connection.email, recipient: to, subject, textBody, status: 'SENDING', trackingToken: randomToken(24), events: [] });
+    await addEvent(log, 'SENDING', 'Message handed to Gmail API for submission.', 'system');
+    const built = instrumentHtml(htmlInput || '', log);
+    const html = built.html;
+    const raw = buildMime({ from: connection.email, to, subject, html, text: textBody });
+    const sent = await gmail.users.messages.send({ userId: 'me', requestBody: { raw } });
+    log.gmailMessageId = sent.data.id || '';
+    log.gmailThreadId = sent.data.threadId || '';
+    await addEvent(log, 'SUBMITTED', 'Gmail API accepted the send request. This is not proof of recipient delivery.', 'gmail_api');
     try {
-      const sentMeta = await gmail.users.messages.get({
-        userId: "me",
-        id: sent.data.id,
-        format: "metadata",
-        metadataHeaders: ["Message-ID"]
-      });
-      const actualHeader = (sentMeta.data.payload?.headers || [])
-        .find(h => h.name?.toLowerCase() === "message-id")?.value || "";
-      if (actualHeader) log.rfcMessageId = actualHeader.replace(/[<>]/g, "").trim().toLowerCase();
-    } catch (metaError) {
-      console.warn("[mail] Could not read sent Message-ID metadata:", metaError.message);
-    }
-    log.status = "submitted";
-    log.events.push(createEvent("submitted", "Gmail API accepted the send request; delivery is not yet confirmed.", "gmail_api"));
+      const meta = await gmail.users.messages.get({ userId: 'me', id: sent.data.id, format: 'metadata', metadataHeaders: ['Message-ID'] });
+      const headers = headerMap(meta.data.payload);
+      log.rfcMessageId = normalizeMessageId(headers['message-id']);
+    } catch (e) { console.warn('[mail] sent metadata unavailable:', e.message); }
     await log.save();
-
-    console.log(`[mail] submitted ${log._id} (${log.recipient}) pixel=1 links=${log.trackedLinks.length}`);
-    res.json({
-      ok: true, id: log._id, sender: conn.email,
-      message: "Gmail API accepted the message.",
-      tracking: { pixelIncluded: true, links: log.trackedLinks.length }
-    });
+    res.status(202).json({ ok: true, id: log._id, status: log.status, sender: connection.email, recipient: to, tracking: { pixelIncluded: true, trackedLinks: log.trackedLinks.length } });
   } catch (e) {
-    console.error("[mail] send failed:", e.message);
-    if (log && !log.gmailMessageId) {
-      // API submission failure is not a recipient bounce. Keep it distinct.
-      log.status = "send_failed";
-      log.events.push(createEvent("send_failed", `Gmail API rejected the send request: ${e.message}`, "gmail_api"));
-      await log.save().catch(() => {});
-    }
-    res.status(500).json({ error: e.message || "Unable to send email." });
+    console.error('[mail] send error:', e.message);
+    if (log && !log.gmailMessageId) { log.status = 'SEND_FAILED'; await addEvent(log, 'SEND_FAILED', safeMessage(e), 'gmail_api'); await log.save().catch(() => {}); }
+    res.status(500).json({ error: safeMessage(e) });
   }
 });
 
-app.get("/api/emails", async (req, res) => {
-  const emails = await EmailLog.find({ userId: req.session.userId }).sort({ createdAt: -1 }).limit(100).lean();
-  res.json(emails);
+app.get('/api/emails', async (req, res) => {
+  const logs = await EmailLog.find({ userId: req.userId }).sort({ createdAt: -1 }).limit(200).lean();
+  res.json(logs);
+});
+app.get('/api/emails/:id', async (req, res) => {
+  const log = await EmailLog.findOne({ _id: req.params.id, userId: req.userId }).lean();
+  if (!log) return res.status(404).json({ error: 'Email record not found.' });
+  const replies = await EmailReply.find({ userId: req.userId, emailLogId: log._id }).sort({ receivedAt: 1 }).lean();
+  res.json({ email: log, replies });
+});
+app.get('/api/replies', async (req, res) => {
+  const query = { userId: req.userId };
+  if (req.query.unread === 'true') query.isRead = false;
+  const replies = await EmailReply.find(query).sort({ receivedAt: -1 }).limit(200).lean();
+  res.json(replies);
+});
+app.post('/api/replies/:id/read', async (req, res) => {
+  const reply = await EmailReply.findOneAndUpdate({ _id: req.params.id, userId: req.userId }, { $set: { isRead: true } }, { new: true });
+  if (!reply) return res.status(404).json({ error: 'Reply not found.' });
+  res.json({ ok: true });
 });
 
-// For this prototype, run this endpoint on demand to check the connected mailbox for DSN/bounce notices.
-// Gmail does not provide a "delivered" webhook for messages sent through gmail.users.messages.send.
-function decodeGmailBody(data) {
-  if (!data) return "";
-  const normalized = data.replace(/-/g, "+").replace(/_/g, "/");
-  return Buffer.from(normalized, "base64").toString("utf8");
+function parseDsn(text) {
+  const lines = String(text || '').split(/\r?\n/);
+  const get = name => { const prefix = `${name.toLowerCase()}:`; const line = lines.find(x => x.toLowerCase().startsWith(prefix)); return line ? line.slice(prefix.length).trim() : ''; };
+  const status = get('Status');
+  const action = get('Action').toLowerCase();
+  const finalRecipient = (get('Final-Recipient') || get('Original-Recipient')).split(';').pop().trim().toLowerCase();
+  const originalMessageId = normalizeMessageId(get('Original-Message-ID'));
+  const diagnostic = get('Diagnostic-Code');
+  return { status, action, finalRecipient, originalMessageId, diagnostic, isAddressMissing: /^5\.1\.1\b/.test(status) || /5\.1\.1|user unknown|mailbox.*not found|address.*not found|no such user/i.test(diagnostic) };
 }
-function flattenMimeText(payload, output = []) {
-  if (!payload) return output;
-  const mime = String(payload.mimeType || "").toLowerCase();
-  if (payload.body?.data && (
-    mime === "text/plain" ||
-    mime === "message/delivery-status" ||
-    mime === "text/rfc822-headers"
-  )) {
-    output.push(decodeGmailBody(payload.body.data));
+async function matchOriginalEmail(userId, { threadId, inReplyTo, references, from, subject }) {
+  const ids = [inReplyTo, ...(String(references || '').match(/<[^>]+>/g) || [])].map(normalizeMessageId).filter(Boolean);
+  let match = null;
+  if (ids.length) match = await EmailLog.findOne({ userId, rfcMessageId: { $in: ids } }).sort({ createdAt: -1 });
+  if (!match && threadId) match = await EmailLog.findOne({ userId, gmailThreadId: threadId }).sort({ createdAt: -1 });
+  if (!match && from) {
+    const candidates = await EmailLog.find({ userId, recipient: parseAddress(from), subject }).sort({ createdAt: -1 }).limit(2);
+    if (candidates.length === 1) match = candidates[0];
   }
-  (payload.parts || []).forEach(part => flattenMimeText(part, output));
-  return output;
+  return match;
 }
-function extractDsnFields(text) {
-  const lines = String(text || "").split(/\r?\n/);
-  const get = name => {
-    const prefix = `${name.toLowerCase()}:`;
-    const line = lines.find(x => x.toLowerCase().startsWith(prefix));
-    return line ? line.slice(prefix.length).trim() : "";
-  };
-  return {
-    action: get("Action").toLowerCase(),
-    status: get("Status"),
-    finalRecipient: (get("Final-Recipient") || get("Original-Recipient")).split(";").pop().trim().toLowerCase(),
-    originalMessageId: get("Original-Message-ID").replace(/[<>]/g, "").trim().toLowerCase(),
-    trackingToken: get("X-BlueCode-Tracking-ID").trim().toLowerCase()
-  };
+async function processBounce(gmail, userId, message) {
+  const headers = headerMap(message.payload);
+  const from = headers.from || '';
+  const subject = headers.subject || '';
+  const bodies = collectBodies(message.payload);
+  const combined = `${subject}\n${message.snippet || ''}\n${bodies.dsn.join('\n')}\n${bodies.text.join('\n')}`;
+  if (!/mailer-daemon|mail-delivery-subsystem|delivery status notification|undeliverable|delivery failure|address not found/i.test(`${from} ${subject}`)) return false;
+  const dsn = parseDsn(combined);
+  let original = null;
+  if (dsn.originalMessageId) original = await EmailLog.findOne({ userId, rfcMessageId: dsn.originalMessageId });
+  if (!original && dsn.finalRecipient) {
+    const recent = await EmailLog.find({ userId, recipient: dsn.finalRecipient, createdAt: { $gte: new Date(Date.now() - 45 * 86400000) } }).sort({ createdAt: -1 }).limit(2);
+    if (recent.length === 1) original = recent[0];
+  }
+  if (!original) return false;
+  const code = dsn.status || (dsn.diagnostic.match(/\b[245]\.\d\.\d\b/) || [])[0] || '';
+  const dsnKey = `dsn:${message.id}:${original._id}`;
+  if (dsn.action === 'delivered' || /^2\./.test(dsn.status)) {
+    await addEvent(original, 'DELIVERED', `Gmail DSN reports recipient-server delivery (${code || dsn.action}).`, 'gmail_dsn', { dedupeKey: dsnKey });
+    original.deliveryEvidence = 'Gmail delivery-status notification (Action: delivered)';
+  } else if (dsn.action === 'failed' || /^5\./.test(dsn.status) || dsn.isAddressMissing) {
+    const type = dsn.isAddressMissing ? 'ADDRESS_NOT_FOUND' : 'BOUNCED';
+    await addEvent(original, type, `Gmail delivery-status message: ${dsn.diagnostic || subject || 'Delivery failure'}`, 'gmail_dsn', { dedupeKey: dsnKey });
+    original.bounceCode = code;
+    original.bounceReason = (dsn.diagnostic || subject || 'Delivery failure').slice(0, 1000);
+    original.deliveryEvidence = 'Gmail delivery-status notification (failure)';
+  } else if (dsn.action === 'delayed' || /^4\./.test(dsn.status)) {
+    await addEvent(original, 'DELIVERY_DEFERRED', `Gmail DSN reports a temporary delay (${code || dsn.action}).`, 'gmail_dsn', { dedupeKey: dsnKey });
+  } else {
+    return false;
+  }
+  await original.save();
+  return true;
 }
-
-app.post("/api/email/sync-delivery", async (req, res) => {
-  try {
-    const conn = await EmailConnection.findOne({ userId: req.session.userId });
-    if (!conn) return res.status(400).json({ error: "Connect Gmail first." });
-
-    const oauth = oauthClient();
-    oauth.setCredentials(decrypt(conn.encryptedTokens));
-    const gmail = google.gmail({ version: "v1", auth: oauth });
-
-    // in:anywhere includes Spam/Trash where a DSN may have been classified.
-    const q = 'in:anywhere (from:mailer-daemon OR from:mail-delivery-subsystem) newer_than:30d';
-    const listed = await gmail.users.messages.list({ userId: "me", q, maxResults: 100 });
-    const messages = listed.data.messages || [];
-    let scanned = 0, bounced = 0, delivered = 0, unmatched = 0;
-
-    for (const item of messages) {
-      const msg = await gmail.users.messages.get({ userId: "me", id: item.id, format: "full" });
+async function syncMailbox(userId, { maxResults = SYNC_MAX } = {}) {
+  const { gmail, connection } = await getConnection(userId);
+  const listed = await gmail.users.messages.list({ userId: 'me', q: 'in:anywhere newer_than:45d', maxResults: Math.min(100, maxResults) });
+  const items = listed.data.messages || [];
+  let scanned = 0, repliesAdded = 0, bouncesMatched = 0, skipped = 0;
+  for (const item of items) {
+    const already = await ProcessedMessage.exists({ userId, gmailMessageId: item.id });
+    if (already) { skipped++; continue; }
+    try {
+      const response = await gmail.users.messages.get({ userId: 'me', id: item.id, format: 'full' });
+      const msg = response.data;
+      const headers = headerMap(msg.payload);
+      const sender = parseAddress(headers.from || '');
+      const subject = headers.subject || '';
+      const fromSelf = sender === connection.email.toLowerCase();
+      const bodies = collectBodies(msg.payload);
+      const text = bodies.text.join('\n').trim() || stripHtml(bodies.html.join('\n'));
+      const html = bodies.html.join('\n');
+      const internalDate = parseDate(msg.internalDate, new Date());
+      const isBounce = await processBounce(gmail, userId, msg);
+      if (isBounce) bouncesMatched++;
+      else if (!fromSelf && sender) {
+        const original = await matchOriginalEmail(userId, {
+          threadId: msg.threadId,
+          inReplyTo: headers['in-reply-to'],
+          references: headers.references,
+          from: headers.from,
+          subject: subject.replace(/^\s*(re|fw|fwd)\s*:\s*/i, '').trim()
+        });
+        if (original) {
+          await EmailReply.updateOne({ userId, gmailMessageId: msg.id }, { $setOnInsert: {
+            userId, emailLogId: original._id, gmailMessageId: msg.id, gmailThreadId: msg.threadId || '',
+            rfcMessageId: normalizeMessageId(headers['message-id']), inReplyTo: normalizeMessageId(headers['in-reply-to']),
+            references: headers.references || '', from: headers.from || sender, to: headers.to || connection.email,
+            subject, text, html, receivedAt: internalDate, snippet: msg.snippet || ''
+          } }, { upsert: true });
+          original.repliedAt = original.repliedAt || internalDate;
+          await addEvent(original, 'REPLIED', `Reply received from ${sender}`, 'gmail_sync', { dedupeKey: `reply:${msg.id}` });
+          await original.save();
+          repliesAdded++;
+        }
+      }
+      await ProcessedMessage.updateOne({ userId, gmailMessageId: msg.id }, { $setOnInsert: { userId, gmailMessageId: msg.id, kind: isBounce ? 'bounce' : 'scanned' } }, { upsert: true });
       scanned++;
-      const headers = msg.data.payload?.headers || [];
-      const header = name => headers.find(h => h.name?.toLowerCase() === name.toLowerCase())?.value || "";
-      const subject = header("Subject");
-      const from = header("From");
-      const snippet = msg.data.snippet || "";
-      const bodyText = flattenMimeText(msg.data.payload).join("\n");
-      const text = `${subject}\n${from}\n${snippet}\n${bodyText}`;
-      const senderLooksLikeDaemon = /mailer-daemon|mail-delivery-subsystem/i.test(from);
-      const subjectLooksLikeDsn = /delivery status notification|undeliverable|delivery failure|address not found|user unknown|mailbox unavailable|message not delivered/i.test(subject);
-      if (!senderLooksLikeDaemon && !subjectLooksLikeDsn) continue;
-
-      const fields = extractDsnFields(text);
-      const idFromDsn = fields.originalMessageId.toLowerCase();
-      const candidates = idFromDsn
-        ? await EmailLog.find({ userId: req.session.userId, rfcMessageId: idFromDsn }).limit(2)
-        : [];
-      const tokenCandidates = (!candidates.length && fields.trackingToken)
-        ? await EmailLog.find({ userId: req.session.userId, trackingToken: fields.trackingToken }).limit(2)
-        : [];
-
-      let matched = candidates.length === 1 ? candidates[0]
-        : (tokenCandidates.length === 1 ? tokenCandidates[0] : null);
-
-      // Conservative fallback: only match if exact final recipient and original subject
-      // identify exactly one recent message. Never infer Delivered from no bounce.
-      if (!matched && fields.finalRecipient && subject) {
-        const possible = await EmailLog.find({
-          userId: req.session.userId,
-          recipient: fields.finalRecipient,
-          createdAt: { $gte: new Date(Date.now() - 30 * 86400000) }
-        }).sort({ createdAt: -1 }).limit(10);
-        const subjectMatches = possible.filter(x =>
-          x.subject && text.toLowerCase().includes(x.subject.toLowerCase())
-        );
-        if (subjectMatches.length === 1) matched = subjectMatches[0];
-      }
-
-      if (!matched) { unmatched++; continue; }
-
-      const isFailed = fields.action === "failed" || /^5\.\d\.\d/.test(fields.status) ||
-        /delivery failed|not delivered|undeliverable|address not found|user unknown|mailbox unavailable|550\\s/i.test(text);
-      const isDelivered = fields.action === "delivered" || /^2\.\d\.\d/.test(fields.status);
-
-      if (isFailed) {
-        appendStatusEvent(matched, "bounced", `DSN reports failed delivery (${fields.status || fields.action || "failure"}): ${subject}`, "gmail_dsn");
-        matched.bounceReason = `${fields.status || fields.action || "Delivery failure"} ${fields.finalRecipient || matched.recipient}`.trim();
-        matched.deliveryEvidence = "Gmail delivery-status notification (failure)";
-        matched.lastBounceCheckAt = new Date();
-        await matched.save();
-        bounced++;
-      } else if (isDelivered) {
-        appendStatusEvent(matched, "delivered", `DSN reports successful delivery (${fields.status || fields.action}): ${subject}`, "gmail_dsn");
-        matched.deliveryEvidence = "Gmail delivery-status notification (success)";
-        matched.lastBounceCheckAt = new Date();
-        await matched.save();
-        delivered++;
-      } else {
-        unmatched++;
-      }
+    } catch (error) {
+      // Do not mark failed fetches as processed; the next sync can retry them.
+      console.warn('[gmail-sync] message failed:', item.id, error.message);
     }
-
-    conn.lastBounceSyncAt = new Date();
-    await conn.save();
-    res.json({
-      ok: true,
-      messagesScanned: scanned,
-      bounceEventsAdded: bounced,
-      deliveredEventsAdded: delivered,
-      unmatchedDsnMessages: unmatched,
-      note: "Only matching DSN delivery/failure evidence changes status. No bounce found does not mean Delivered; Gmail may not provide a positive delivery receipt."
-    });
-  } catch (e) {
-    console.error("[delivery-sync] error:", e.message);
-    res.status(500).json({ error: e.message || "Unable to sync delivery notifications." });
   }
-});
-
-app.get("/api/tracking/diagnostics", (req, res) => res.json({
-  ok: true, publicTrackingUrl: TRACKING_BASE(),
-  pixelExample: `${TRACKING_BASE()}/track/open/{token}.gif`,
-  clickExample: `${TRACKING_BASE()}/track/click/{token}/{linkId}`
-}));
-
-app.get("/track/ping", (req, res) => res.type("text/plain").set("Cache-Control", "no-store").send("BlueCode OS tracking endpoint is reachable."));
-
-function gif(res) {
-  const bytes = Buffer.from("R0lGODlhAQABAAD/ACwAAAAAAQABAAACADs=", "base64");
-  res.status(200).set({
-    "Content-Type": "image/gif", "Content-Length": String(bytes.length),
-    "Cache-Control": "no-store, no-cache, must-revalidate, private, max-age=0",
-    "Pragma": "no-cache", "X-Content-Type-Options": "nosniff"
-  }).end(bytes);
+  connection.lastSyncAt = new Date();
+  connection.lastSyncError = '';
+  if (listed.data.historyId) connection.gmailHistoryId = String(listed.data.historyId);
+  await connection.save();
+  return { ok: true, messagesScanned: scanned, repliesAdded, bounceMessagesMatched: bouncesMatched, alreadyProcessed: skipped, lastSyncAt: connection.lastSyncAt };
 }
-
-app.get("/track/open/:token.gif", async (req, res) => {
+app.post('/api/gmail/sync', async (req, res) => {
+  try { res.json(await syncMailbox(req.userId, { maxResults: Number(req.body?.maxResults || SYNC_MAX) })); }
+  catch (e) { console.error('[gmail-sync] error:', e.message); await EmailConnection.updateOne({ userId: req.userId }, { $set: { lastSyncError: e.message } }); res.status(500).json({ error: safeMessage(e) }); }
+});
+app.post('/api/email/sync-delivery', async (req, res) => {
+  try { const result = await syncMailbox(req.userId); res.json({ ...result, note: 'Only matched DSN evidence is used for bounce classification. No bounce notification is not proof of delivery.' }); }
+  catch (e) { res.status(500).json({ error: safeMessage(e) }); }
+});
+app.post('/api/replies/:id/send', async (req, res) => {
   try {
-    const email = await EmailLog.findOne({ trackingToken: req.params.token });
-    if (email) {
-      email.openCount = (email.openCount || 0) + 1;
-      appendStatusEvent(email, "opened", "Tracking pixel requested; may be a proxy or automated image fetch.", "tracking_pixel");
-      await email.save();
-      console.log(`[tracking] OPEN ${email._id} count=${email.openCount} automated=${/(bot|crawler|scanner|proxy)/i.test(req.get("user-agent") || "")}`);
-    } else {
-      console.warn("[tracking] unknown open token", req.params.token.slice(0, 8));
+    const reply = await EmailReply.findOne({ _id: req.params.id, userId: req.userId });
+    if (!reply) return res.status(404).json({ error: 'Conversation not found.' });
+    const body = String(req.body?.body || '').trim();
+    if (!body) return res.status(400).json({ error: 'Reply message cannot be empty.' });
+    const { connection, gmail } = await getConnection(req.userId);
+    const to = parseAddress(reply.from);
+    const subject = /^re:/i.test(reply.subject) ? reply.subject : `Re: ${reply.subject}`;
+    const raw = buildMime({ from: connection.email, to, subject, text: body, html: `<div style="font:14px/1.6 Arial,sans-serif;white-space:pre-wrap">${body.replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}</div>`, inReplyTo: reply.rfcMessageId, references: [reply.references, reply.rfcMessageId].filter(Boolean).join(' ') });
+    const sent = await gmail.users.messages.send({ userId: 'me', requestBody: { raw, threadId: reply.gmailThreadId } });
+    res.status(202).json({ ok: true, gmailMessageId: sent.data.id, threadId: sent.data.threadId });
+  } catch (e) { res.status(500).json({ error: safeMessage(e) }); }
+});
+
+app.get('/track/open/:token.gif', async (req, res) => {
+  try { await recordOpen(req.params.token, req.get('user-agent') || ''); }
+  catch (e) { console.error('[tracking] open:', e.message); }
+  const bytes = gifBytes();
+  res.status(200).set({ 'Content-Type':'image/gif', 'Content-Length':String(bytes.length), 'Cache-Control':'no-store, no-cache, must-revalidate, private, max-age=0', 'Pragma':'no-cache', 'X-Content-Type-Options':'nosniff' }).end(bytes);
+});
+app.get('/track/click/:token/:linkId', async (req, res) => {
+  try {
+    const destination = await recordClick(req.params.token, req.params.linkId, req.get('user-agent') || '');
+    if (!destination) return res.status(404).send('Tracking link not found.');
+    res.redirect(302, destination);
+  } catch (e) { console.error('[tracking] click:', e.message); res.status(500).send('Unable to process tracked link.'); }
+});
+app.get('/track/ping', (req, res) => res.type('text/plain').set('Cache-Control','no-store').send('BlueCode OS tracking endpoint is reachable.'));
+app.get('/api/tracking/diagnostics', (req, res) => res.json({ ok: true, publicTrackingUrl: BASE(), pixelExample: `${BASE()}/track/open/{token}.gif`, clickExample: `${BASE()}/track/click/{token}/{linkId}` }));
+app.get('/health', (req, res) => res.json({ ok: true, service: 'bluecode-os-email-lifecycle' }));
+
+// Development poller: processes each connected account. Use a durable job queue in production.
+let syncBusy = false;
+async function runPeriodicSync() {
+  if (syncBusy || mongoose.connection.readyState !== 1) return;
+  syncBusy = true;
+  try {
+    const connections = await EmailConnection.find({}).select('userId').lean();
+    for (const c of connections) {
+      try { await syncMailbox(c.userId); }
+      catch (e) { console.warn('[gmail-sync] periodic sync failed:', c.userId, e.message); await EmailConnection.updateOne({ userId: c.userId }, { $set: { lastSyncError: e.message } }); }
     }
-  } catch (e) { console.error("[tracking] open error:", e.message); }
-  gif(res);
-});
-
-app.get("/track/click/:token/:linkId", async (req, res) => {
-  try {
-    const email = await EmailLog.findOne({ trackingToken: req.params.token });
-    if (!email) return res.status(404).send("Tracking record not found.");
-    const link = email.trackedLinks.find(x => x.linkId === req.params.linkId);
-    if (!link) return res.status(404).send("Tracked destination not found.");
-    link.clicks = (link.clicks || 0) + 1;
-    email.clickCount = (email.clickCount || 0) + 1;
-    appendStatusEvent(email, "clicked", `Tracked link requested: ${new URL(link.destination).hostname}`, "tracking_link");
-    await email.save();
-    console.log(`[tracking] CLICK ${email._id} count=${email.clickCount}`);
-    res.redirect(302, link.destination);
-  } catch (e) {
-    console.error("[tracking] click error:", e.message);
-    res.status(500).send("Unable to process tracked link.");
-  }
-});
-
-// Manual delivery confirmation is intentionally unavailable: only recognized DSN bounce evidence is ingested.
-// Gmail API send acceptance alone cannot prove Delivered.
-
-app.get("/health", (req, res) => res.json({ ok: true }));
-
+  } finally { syncBusy = false; }
+}
 async function start() {
-  if (!process.env.MONGO_URI) throw new Error("MONGO_URI is missing in .env");
+  if (!process.env.MONGO_URI) throw new Error('MONGO_URI is required.');
   await mongoose.connect(process.env.MONGO_URI);
-  console.log("Connected to MongoDB");
-  app.listen(PORT, () => {
-    console.log(`BlueCode Gmail prototype: http://localhost:${PORT}`);
-    console.log(`Public tracking base: ${TRACKING_BASE()}`);
-  });
+  // Compatibility migration for lifecycle records created by the earlier lowercase-status prototype.
+  const legacyStatuses = { submitted: 'SUBMITTED', delivered: 'DELIVERED', opened: 'OPENED', clicked: 'CLICKED', bounced: 'BOUNCED', send_failed: 'SEND_FAILED' };
+  for (const [oldStatus, newStatus] of Object.entries(legacyStatuses)) {
+    await EmailLog.updateMany({ status: oldStatus }, { $set: { status: newStatus } });
+  }
+  console.log('[db] MongoDB connected');
+  app.listen(PORT, () => console.log(`[server] BlueCode OS email lifecycle: http://localhost:${PORT}\n[tracking] ${BASE()}`));
+  setInterval(runPeriodicSync, SYNC_INTERVAL).unref();
 }
-start().catch(e => { console.error(e); process.exit(1); });
+start().catch(error => { console.error('[startup]', error); process.exit(1); });
+
+module.exports = { app, syncMailbox, parseDsn, matchOriginalEmail };
