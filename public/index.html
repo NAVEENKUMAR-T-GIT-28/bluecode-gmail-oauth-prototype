@@ -3,75 +3,81 @@
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <title>BlueCode OS · Gmail Connect Demo</title>
+  <title>BlueCode OS · Email Lifecycle Demo</title>
   <style>
     :root{font-family:Inter,system-ui,Segoe UI,Arial,sans-serif;color:#172033;background:#f4f6fa}
-    *{box-sizing:border-box}body{margin:0}.wrap{max-width:1000px;margin:36px auto;padding:0 18px}
+    *{box-sizing:border-box}body{margin:0}.wrap{max-width:1050px;margin:36px auto;padding:0 18px}
     header{display:flex;justify-content:space-between;align-items:center;gap:16px;margin-bottom:24px}
-    .brand{font-weight:800;font-size:22px;letter-spacing:-.5px}.brand span{color:#f07832}
-    .sub{color:#647084;font-size:13px;margin-top:5px}.pill{border-radius:99px;background:#e9edf4;padding:7px 11px;font-size:12px}
+    .brand{font-weight:800;font-size:22px}.brand span{color:#f07832}.sub{color:#647084;font-size:13px;margin-top:5px}
+    .pill{border-radius:99px;background:#e9edf4;padding:7px 11px;font-size:12px}
     .grid{display:grid;grid-template-columns:1fr 1fr;gap:18px}.card{background:white;border:1px solid #e3e8f0;border-radius:16px;padding:22px;box-shadow:0 8px 28px #18233a08}
     h2{font-size:17px;margin:0 0 8px}p{color:#687386;font-size:13px;line-height:1.55}
     button{border:0;border-radius:9px;padding:11px 15px;font-weight:700;cursor:pointer;background:#172033;color:white}
     button.secondary{background:#edf0f5;color:#253047}button.danger{background:#fff0ed;color:#b43b26}
+    button:disabled{opacity:.5;cursor:not-allowed}
     .status{font-size:13px;padding:12px;border-radius:10px;background:#f3f6fa;margin:15px 0}
     label{display:block;font-size:12px;font-weight:700;margin:13px 0 6px;color:#475267}
     input,textarea{width:100%;padding:11px;border:1px solid #dce2eb;border-radius:9px;font:inherit;font-size:14px}
-    textarea{min-height:140px;resize:vertical}.actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:14px}
-    .wide{grid-column:1/-1}.mail{border-top:1px solid #edf0f4;padding:13px 0}.mail:first-child{border-top:0}
+    textarea{min-height:150px;resize:vertical}.actions{display:flex;gap:9px;flex-wrap:wrap;margin-top:14px}
+    .wide{grid-column:1/-1}.mail{border-top:1px solid #edf0f4;padding:15px 0}.mail:first-child{border-top:0}
     .mail strong{font-size:14px}.meta{font-size:12px;color:#788397;margin-top:4px}
-    .events{display:flex;gap:6px;flex-wrap:wrap;margin-top:8px}.event{font-size:11px;background:#eef3fa;padding:4px 8px;border-radius:99px}
+    .events{display:flex;gap:6px;flex-wrap:wrap;margin-top:9px}.event{font-size:11px;background:#eef3fa;padding:5px 8px;border-radius:99px}
+    .status-badge{font-size:11px;padding:5px 9px;border-radius:99px;font-weight:700;background:#edf0f5;color:#344055}
+    .submitted{background:#eaf0fb;color:#31558f}.delivered{background:#e5f6ed;color:#17663b}.bounced{background:#fff0ed;color:#ae3524}.opened{background:#eaf4ff;color:#155d9c}.clicked{background:#f1eafe;color:#6941a5}.send_failed{background:#fce7e7;color:#9b2525}
     .notice{background:#fff8e9;border:1px solid #f5dfad;padding:12px;border-radius:10px;color:#75551c;font-size:12px;line-height:1.5;margin-top:14px}
-    #toast{position:fixed;bottom:20px;right:20px;background:#172033;color:white;padding:12px 16px;border-radius:10px;display:none;max-width:360px}
+    #toast{position:fixed;bottom:20px;right:20px;background:#172033;color:white;padding:12px 16px;border-radius:10px;display:none;max-width:420px}
     @media(max-width:700px){.grid{grid-template-columns:1fr}.wide{grid-column:auto}header{align-items:flex-start;flex-direction:column}}
   </style>
 </head>
 <body>
 <div class="wrap">
-  <header><div><div class="brand">BlueCode <span>OS</span></div><div class="sub">Gmail OAuth · Sending · Tracking prototype</div></div><div class="pill">LOCAL DEVELOPMENT DEMO</div></header>
+  <header><div><div class="brand">BlueCode <span>OS</span></div><div class="sub">Gmail OAuth · Sending · Email lifecycle tracking</div></div><div class="pill">LOCAL DEVELOPMENT DEMO</div></header>
   <div class="grid">
     <section class="card">
       <h2>1. Connect your Gmail</h2>
-      <p>Authorize BlueCode OS to send emails from your Google account. Your Gmail password is never requested or stored.</p>
+      <p>Connect the Gmail account that will send email. Bounce sync also reads delivery-failure notifications from this mailbox.</p>
       <div class="status" id="connection">Checking Gmail connection…</div>
       <div class="actions"><button id="connect">Connect Gmail with Google</button><button class="secondary" id="refresh">Refresh</button><button class="danger" id="disconnect">Disconnect</button></div>
+      <div class="notice">Reconnecting may show a new consent screen because this version adds Gmail read-only access for bounce-notice detection.</div>
     </section>
     <section class="card">
-      <h2>2. How this demo works</h2>
-      <p>Google OAuth gives the backend permission to send. The backend stores encrypted tokens in MongoDB and uses the connected account for each send.</p>
-      <p><b>Tracking:</b> each new email gets a unique 1×1 image URL and unique redirect URLs for links. Open/click signals can be generated by privacy proxies or security scanners.</p>
-      <div class="notice">Important: “Submitted” means Gmail accepted the send request, not that the recipient address exists or the message was delivered. Open/click signals are approximate; privacy proxies and security scanners can trigger them. Bounce/delivery confirmation is not included in this tracking-only test patch.</div>
+      <h2>2. Lifecycle definitions</h2>
+      <p><b>Submitted:</b> Gmail accepted the API request. <b>Delivered:</b> only mark with positive delivery evidence. <b>Bounced:</b> recognizable failure notice found. <b>Opened:</b> pixel requested. <b>Clicked:</b> tracked redirect requested.</p>
+      <div class="notice">Gmail API does not provide a definitive delivered webhook. This demo scans the connected mailbox for common DSN/bounce messages. It is best-effort, not a carrier-grade delivery guarantee. Pixel and clicks can be triggered by privacy proxies or automated scanners.</div>
     </section>
     <section class="card wide">
       <h2>3. Compose and send</h2>
-      <p>The sender is selected automatically from the Gmail account connected above.</p>
+      <p>Plain URLs in your message are converted to tracked links automatically.</p>
       <form id="sendForm">
         <label>Recipient</label><input id="to" type="email" placeholder="recipient@example.com" required />
         <label>Subject</label><input id="subject" placeholder="A message from BlueCode OS" required />
-        <label>Message</label><textarea id="body" placeholder="Hi,&#10;&#10;This is a test email sent through my connected Gmail account.&#10;&#10;Regards"></textarea>
+        <label>Message</label><textarea id="body" placeholder="Hi,&#10;&#10;Please review: https://www.google.com&#10;&#10;Regards" required></textarea>
         <div class="actions"><button type="submit">Send test email</button></div>
       </form>
     </section>
     <section class="card wide">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px"><div><h2>4. Email activity</h2><p>Submission, open-pixel and tracked-link events.</p></div><button class="secondary" id="reloadLogs">Refresh activity</button></div>
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+        <div><h2>4. Email activity</h2><p>Submitted, delivered evidence, bounce notices, open-pixel and tracked-link activity.</p></div>
+        <div class="actions"><button class="secondary" id="syncBounces">Sync bounce notices</button><button class="secondary" id="reloadLogs">Refresh activity</button></div>
+      </div>
+      <div id="syncResult" class="meta"></div>
       <div id="logs">No emails yet.</div>
     </section>
   </div>
 </div>
 <div id="toast"></div>
 <script>
-const $ = id => document.getElementById(id);
-function toast(message){$('toast').textContent=message;$('toast').style.display='block';setTimeout(()=>$('toast').style.display='none',4500)}
-async function api(url, options={}){const r=await fetch(url,{...options,headers:{'Content-Type':'application/json',...(options.headers||{})}});const data=await r.json().catch(()=>({}));if(!r.ok)throw new Error(data.error||'Request failed');return data}
-async function loadConnection(){try{const d=await api('/api/connection');$('connection').textContent=d.connected?'Connected as '+d.email:'No Gmail account connected';$('connect').textContent=d.connected?'Reconnect Gmail':'Connect Gmail with Google';$('sendForm').querySelector('button').disabled=!d.connected;}catch(e){$('connection').textContent=e.message}}
-async function loadLogs(){try{const logs=await api('/api/emails');if(!logs.length){$('logs').textContent='No emails sent yet.';return}$('logs').innerHTML=logs.map(m=>{const events=(m.events||[]).map(e=>{const suffix=e.automatedLikely?' · automated-looking request':'';return `<span class="event">${esc(e.type)} · ${new Date(e.at).toLocaleTimeString()}${suffix}</span>`}).join('');return `<div class="mail"><strong>${esc(m.subject||'(no subject)')}</strong><div class="meta">${esc(m.sender||'')} → ${esc(m.recipient||'')} · ${new Date(m.createdAt).toLocaleString()}</div><div class="meta">Open requests: ${Number(m.openCount||0)} · Tracked-link clicks: ${Number(m.clickCount||0)} · Links in message: ${(m.trackedLinks||[]).length}</div><div class="events">${events||'<span class="event">No tracking signal yet</span>'}</div></div>`}).join('')}catch(e){$('logs').textContent=e.message}}
-function esc(s){return String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
-$('connect').onclick=()=>location.href='/auth/google';
-$('refresh').onclick=loadConnection;
-$('reloadLogs').onclick=loadLogs;
+const $=id=>document.getElementById(id);
+function toast(s){$('toast').textContent=s;$('toast').style.display='block';setTimeout(()=>$('toast').style.display='none',5000)}
+async function api(url,options={}){const r=await fetch(url,{...options,headers:{'Content-Type':'application/json',...(options.headers||{})}});const d=await r.json().catch(()=>({}));if(!r.ok)throw new Error(d.error||'Request failed');return d}
+function esc(s){return String(s??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))}
+async function loadConnection(){try{const d=await api('/api/connection');$('connection').textContent=d.connected?'Connected as '+d.email:'No Gmail account connected';$('connect').textContent=d.connected?'Reconnect Gmail':'Connect Gmail with Google';$('sendForm').querySelector('button').disabled=!d.connected;$('syncBounces').disabled=!d.connected}catch(e){$('connection').textContent=e.message}}
+async function loadLogs(){try{const logs=await api('/api/emails');if(!logs.length){$('logs').textContent='No emails sent yet.';return}$('logs').innerHTML=logs.map(m=>{const st=['submitted','delivered','bounced','opened','clicked','send_failed'].includes(m.status)?m.status:'submitted';const ev=(m.events||[]).map(e=>`<span class="event">${esc(e.type)} · ${new Date(e.at).toLocaleString()}${e.automatedLikely?' · automated-looking':''}</span>`).join('');return `<div class="mail"><div style="display:flex;justify-content:space-between;gap:12px;align-items:center;flex-wrap:wrap"><strong>${esc(m.subject||'(no subject)')}</strong><span class="status-badge ${st}">${st==="send_failed"?"SEND FAILED":st.toUpperCase()}</span></div><div class="meta">${esc(m.sender)} → ${esc(m.recipient)} · ${new Date(m.createdAt).toLocaleString()}</div><div class="meta">Open requests: ${Number(m.openCount||0)} · Click requests: ${Number(m.clickCount||0)} · Tracked links: ${(m.trackedLinks||[]).length}</div>${m.bounceReason?`<div class="meta" style="color:#ae3524">Bounce: ${esc(m.bounceReason)}</div>`:''}<div class="events">${ev||'<span class="event">No tracking signal yet</span>'}</div></div>`}).join('')}catch(e){$('logs').textContent=e.message}}
+$('connect').onclick=()=>location.href='/auth/google';$('refresh').onclick=loadConnection;$('reloadLogs').onclick=loadLogs;
 $('disconnect').onclick=async()=>{try{await api('/api/disconnect',{method:'POST'});toast('Gmail disconnected');await loadConnection()}catch(e){toast(e.message)}};
-$('sendForm').onsubmit=async e=>{e.preventDefault();try{const d=await api('/api/send',{method:'POST',body:JSON.stringify({to:$('to').value,subject:$('subject').value,body:$('body').value})});toast('Gmail accepted the message from '+d.sender+' · pixel included · '+(d.tracking?.trackedLinks||0)+' tracked link(s)');$('sendForm').reset();await loadLogs()}catch(err){toast(err.message)}};
-const params=new URLSearchParams(location.search);if(params.get('oauth')==='connected')toast('Gmail connected successfully');if(params.get('oauth')==='denied')toast('Google authorization was cancelled');history.replaceState({},'',location.pathname);
+$('sendForm').onsubmit=async e=>{e.preventDefault();try{const d=await api('/api/send',{method:'POST',body:JSON.stringify({to:$('to').value,subject:$('subject').value,body:$('body').value})});toast('Gmail accepted the message from '+d.sender+' · pixel included · '+d.tracking.links+' link(s) tracked');$('sendForm').reset();await loadLogs()}catch(e){toast(e.message)}};
+$('syncBounces').onclick=async()=>{try{$('syncResult').textContent='Scanning Gmail for delivery-failure notices…';const d=await api('/api/email/sync-delivery',{method:'POST'});$('syncResult').textContent=`Scanned ${d.messagesScanned} messages · ${d.bounceEventsAdded} bounce event(s) added. ${d.note}`;await loadLogs()}catch(e){$('syncResult').textContent=e.message}};
+const qp=new URLSearchParams(location.search);if(qp.get('oauth')==='connected')toast('Gmail connected successfully');if(qp.get('oauth')==='denied')toast('Google authorization cancelled');history.replaceState({},'',location.pathname);
 loadConnection();loadLogs();
 </script>
 </body>
